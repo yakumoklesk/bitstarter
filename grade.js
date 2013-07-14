@@ -25,8 +25,12 @@ References:
 var fs = require('fs');
 var program = require('commander');
 var cheerio = require('cheerio');
+var restler = require('restler');
+var Sync = require('sync');
 var HTMLFILE_DEFAULT = "index.html";
 var CHECKSFILE_DEFAULT = "checks.json";
+var URL_DEFAULT = 'http://whispering-cove-1199.herokuapp.com';
+var urlExists = false;
 
 var assertFileExists = function(infile) {
     var instr = infile.toString();
@@ -34,6 +38,19 @@ var assertFileExists = function(infile) {
         console.log("%s does not exist. Exiting.", instr);
         process.exit(1); // http://nodejs.org/api/process.html#process_process_exit_code
     }
+    return instr;
+};
+
+var assertURLExists = function(inURL) {
+    var instr = inURL.toString();
+    restler.get( inURL ).on( 'complete', function(result) {
+        if( result instanceof Error )
+        {
+            console.log( "Error: " + result.message );
+            process.exit(1);
+        }
+        urlExists = true;
+    });        
     return instr;
 };
 
@@ -56,20 +73,72 @@ var checkHtmlFile = function(htmlfile, checksfile) {
     return out;
 };
 
+var checkHtmlContents = function(contents, checksfile) {
+    $ = cheerio.load(contents);
+    var checks = loadChecks(checksfile).sort();
+    var out = {};
+    for(var ii in checks) {
+        var present = $(checks[ii]).length > 0;
+        out[checks[ii]] = present;
+    }
+    return out;
+};
+
+var getURLContents = function(URL, callback)
+{
+    restler.get( URL ).on( 'success', function( data, response ) {
+        callback( data );
+    });
+}
+
+var checkURL = function(URL, checksfile, callback) {
+    getURLContents(URL, function( contents )
+    {
+        var result = checkHtmlContents( contents, checksfile );
+        callback( result );        
+    });
+   
+};
+
 var clone = function(fn) {
     // Workaround for commander.js issue.
     // http://stackoverflow.com/a/6772648
     return fn.bind({});
 };
 
+var checkURLAndPrint = function()
+{
+    if( urlExists )
+    {
+        checkURL(program.url, program.checks, function(result) {
+            var outJson = JSON.stringify(result, null, 4);
+            console.log(outJson);
+        });
+    }
+    else
+    {
+        setTimeout( checkURLAndPrint, 200 );
+    }
+};
+
+
 if(require.main == module) {
     program
         .option('-c, --checks <check_file>', 'Path to checks.json', clone(assertFileExists), CHECKSFILE_DEFAULT)
         .option('-f, --file <html_file>', 'Path to index.html', clone(assertFileExists), HTMLFILE_DEFAULT)
+        .option('-u, --url <URL>', 'URL', clone(assertURLExists) )
         .parse(process.argv);
-    var checkJson = checkHtmlFile(program.file, program.checks);
-    var outJson = JSON.stringify(checkJson, null, 4);
-    console.log(outJson);
+    // Prioritize url
+    if( program.url )
+    {
+        setTimeout( checkURLAndPrint, 200 );
+    }
+    else if( program.file )
+    {
+        var checkJson = checkHtmlFile(program.file, program.checks);
+        var outJson = JSON.stringify(checkJson, null, 4);
+        console.log(outJson);
+    }
 } else {
     exports.checkHtmlFile = checkHtmlFile;
 }
